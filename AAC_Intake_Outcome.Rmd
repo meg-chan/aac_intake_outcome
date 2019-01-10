@@ -1,0 +1,220 @@
+---
+title: "Age and Outcome"
+author: "Megan Chan"
+date: "November 21, 2018"
+output: html_document
+---
+
+#### Load Modules
+```{r, message = FALSE, warning=FALSE}
+library(SDSRegressionR)
+library(skimr)
+library(emmeans)
+```
+
+#### Load Data
+```{r, message = FALSE}
+aac <- read.csv("./aac_intakes_outcomes.csv")
+names(aac)
+```
+
+age_upon_intake_.days.
+time_in_shelter_days
+
+outcome_type
+sex_upon_intake
+intake_type
+intake_condition
+
+#### Code change-point variables
+```{r, message=FALSE}
+cutoff <- 56 # 8 weeks old
+cutoff2 <- 4380 # 12 years old
+
+aac2 <- aac %>% 
+  mutate_at(vars(age_upon_intake_.days., time_in_shelter_days), as.numeric) %>% #Initial catch all for numeric...
+  mutate(age1 = age_upon_intake_.days., #Simplet replication
+         age2 = age_upon_intake_.days. - cutoff, #Start second segment counting...
+         age3 = age_upon_intake_.days. - cutoff2,
+         age2 = case_when(age1 <= cutoff ~ 0, #Make sure to start at zero BEFORE segment
+                          TRUE ~ age2),
+         age3 = case_when(age1 <= cutoff2 ~ 0,
+                          TRUE ~ age3),
+         jump = case_when(age_upon_intake_.days. < cutoff ~ 0, #Define the segment status...
+                          age_upon_intake_.days. >= cutoff ~ 1),
+         jump2 = case_when(age_upon_intake_.days. < cutoff2 ~ 0,
+                           age_upon_intake_.days. >= cutoff2 ~ 1))
+
+plyr::count(aac2, c("age_upon_intake_.days.", "age1", "age2", "age3", "jump", "jump2"))
+```
+
+#### Check Assumptions
+```{r, message=FALSE}
+init_model <- lm(time_in_shelter_days ~ age1 + age2 + age3 + jump + jump2, data = aac2)
+residFitted(init_model) # this does look very weird ... 
+cooksPlot(init_model,
+          key.variable="animal_id_outcome",
+          print.obs=TRUE,
+          sort.obs = TRUE,
+          save.cutoff = TRUE)
+# there are over 3200 observations, so I don't feel bad taking a bunch of stuff out as outliers, but the Analyze the Data assignment says only take out the one's with a cook's distance > 0.01 which are UIDs "ID_11075", "ID_11432", "ID_26725", and "ID_27289"
+my_cooksCutoff <- 2 * cooksCutOff
+my_cooksCutoff
+
+
+#g_gss <- gss2 %>%
+#  filter(UID %not in% c("ID_11075","ID_11432","ID_26725","ID_27289"))
+
+```
+
+```{r}
+summary(init_model)
+
+aac2 %>% 
+  skim(age_upon_intake_.days.)
+
+p1 <- summary(emmeans(init_model, 
+                      "age1", 
+                      at=list(age1=c(0, cutoff), 
+                              age2=0, 
+                              age3 = 0, 
+                              jump=0,
+                              jump2=0)))
+p2 <- summary(emmeans(init_model, 
+                      "age1", 
+                      at=list(age1=c(cutoff, cutoff2),
+                              age2=c(0, (cutoff2-cutoff)),
+                              age3 = 0, 
+                              jump=1,
+                              jump2=0), 
+                      by="age2"))
+
+p3 <- summary(emmeans(init_model, 
+                      "age1", 
+                      at=list(age1=c(cutoff2, 9125), 
+                              age2=c((cutoff2-cutoff), (9125-cutoff)), 
+                              age3=c(0, (9125-cutoff2)), 
+                              jump=1,
+                              jump2=1), 
+                      by = "age3"))
+p2 <- p2 %>% #Just the first and last row
+  slice(c(1,4))
+p3 <- p3 %>%
+  slice(c(1,4))
+p3$emmean <- c(20.605441, -15.826669)
+p1
+p2
+p3
+```
+
+#### Look at the data:
+```{r}
+mns <- simpleScatter(aac, age_upon_intake_.days., time_in_shelter_days, title="Raw Data")
+mns <- mns +
+  geom_vline(xintercept = 56, linetype="dashed", color="green") +
+  geom_vline(xintercept = 4380, linetype="dashed", color="green") +
+  geom_line(data=p1, aes(x=age1, y=emmean), color="red") +
+  geom_line(data=p2, aes(x=age1, y=emmean), color="red") + 
+  geom_line(data=p3, aes(x=age1, y=emmean), color="red")
+mns
+
+mns_gss <- aac %>% 
+  group_by(age_upon_intake_.days.) %>% 
+  summarise(mean = mean(time_in_shelter_days, na.rm=TRUE))
+
+
+g_mns <- simpleScatter(mns_gss, age_upon_intake_.days., mean, title="Means Plot")
+g_mns <- g_mns +
+  geom_vline(xintercept = 56, linetype="dashed", color="green") +
+  geom_vline(xintercept = 4380, linetype="dashed", color="green") +
+  geom_line(data=p1, aes(x=age1, y=emmean), color="red") +
+  geom_line(data=p2, aes(x=age1, y=emmean), color="red") + 
+  geom_line(data=p3, aes(x=age1, y=emmean), color="red")
+g_mns
+
+table(aac$outcome_type)
+table(aac$intake_type)
+table(aac$sex_upon_intake)
+table(aac$intake_condition)
+```
+
+
+```{r}
+aac_adopted <- aac2[aac2$outcome_type == "Adoption",]
+adopt_model <- lm(time_in_shelter_days ~ age1 + age2 + age3 + jump + jump2, data = aac_adopted)
+summary(adopt_model)
+residFitted(adopt_model) # this does look very weird ... 
+cooksPlot(adopt_model,
+          key.variable="animal_id_outcome",
+          print.obs=TRUE,
+          sort.obs = TRUE,
+          save.cutoff = TRUE)
+
+aac_adopted %>% 
+  skim(age_upon_intake_.days.)
+
+p1 <- summary(emmeans(adopt_model, 
+                      "age1", 
+                      at=list(age1=c(0, cutoff), 
+                              age2=0, 
+                              age3 = 0, 
+                              jump=0,
+                              jump2=0)))
+p2 <- summary(emmeans(adopt_model, 
+                      "age1", 
+                      at=list(age1=c(cutoff, cutoff2),
+                              age2=c(0, (cutoff2-cutoff)),
+                              age3 = 0, 
+                              jump=1,
+                              jump2=0), 
+                      by="age2"))
+
+p3 <- summary(emmeans(adopt_model, 
+                      "age1", 
+                      at=list(age1=c(cutoff2, 6570), 
+                              age2=c((cutoff2-cutoff), (6570-cutoff)), 
+                              age3=c(0, (6570-cutoff2)), 
+                              jump=1,
+                              jump2=1), 
+                      by = "age3"))
+p2 <- p2 %>% # Just the first and last row
+  slice(c(1,4))
+
+p3 <- p3 %>%
+  slice(c(1,4))
+
+p1
+p2
+p3
+```
+
+```{r}
+mns <- simpleScatter(aac_adopted, age_upon_intake_.days., time_in_shelter_days, title="Raw Data")
+mns <- mns +
+  geom_vline(xintercept = 56, linetype="dashed", color="green") +
+  geom_vline(xintercept = 4380, linetype="dashed", color="green") #+
+  #geom_line(data=p1, aes(x=age1, y=emmean), color="red") +
+  #geom_line(data=p2, aes(x=age1, y=emmean), color="red") + 
+  #geom_line(data=p3, aes(x=age1, y=emmean), color="red")
+mns
+
+mns_gss <- aac_adopted %>% 
+  group_by(age_upon_intake_.days.) %>% 
+  summarise(mean = mean(time_in_shelter_days, na.rm=TRUE))
+
+
+g_mns <- simpleScatter(mns_gss, age_upon_intake_.days., mean, title="Means Plot")
+g_mns <- g_mns +
+  geom_vline(xintercept = 56, linetype="dashed", color="green") +
+  geom_vline(xintercept = 4380, linetype="dashed", color="green") #+
+  #geom_line(data=p1, aes(x=age1, y=emmean), color="red") +
+  #geom_line(data=p2, aes(x=age1, y=emmean), color="red") + 
+  #geom_line(data=p3, aes(x=age1, y=emmean), color="red")
+#png("adoptedmeans.png")
+g_mns
+#dev.off()
+```
+
+
+
+
